@@ -1,0 +1,42 @@
+properties:
+  docker:
+    config:
+      backend: docker
+      docker:
+        connection:
+          host: dockerhost:2375
+        execution:
+          container:
+            image: ubuntu
+  kubernetes:
+    config:
+      backend: kubernetes
+      kubernetes: # https://containerssh.io/reference/kuberun/
+        connection:
+          host: kubernetes.default.svc
+        pod:
+          metadata:
+            namespace: default
+#          spec:
+#            containers:
+#            - name: containerssh
+#              image: containerssh/containerssh
+  admin:
+    config:
+      docker:
+        execution:
+          container:
+            image: containerssh/containerssh
+users: # map with users
+  user1: # username
+    groups:
+    - kubernetes
+  user2: # username
+    groups:
+    - docker
+    - admin
+server: # server config
+  listen: ":8080"  # default :8080 at http or 8443 on https 
+  cert: example/server/server_cert.pem #server cert
+  key: example/server/server_key.pem #server key
+  clientcacert: example/clientCert1/ca.crt # trusted ca 1

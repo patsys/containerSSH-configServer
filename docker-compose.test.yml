@@ -1,0 +1,108 @@
+version: '3'
+services:
+  openssl:
+    image: patsys/openssl
+    environment:
+      SCRIPT: |
+        #!/bin/sh
+        set -o pipefail
+        set -ex
+        # Servercert
+        cd Server
+        openssl req -nodes -newkey rsa:4096 -keyform PEM -keyout ca.key -x509 -days 3650 -outform PEM -out ca.crt -subj "/C=DE/ST=OverTheAir/L=Springfield/O=Dreams/CN=CAServer"
+        openssl genrsa -out server_key.pem 4096
+        openssl req  -new -key server_key.pem -out server.req -subj  "/C=DE/ST=OverTheAir/L=Springfield/O=Dreams/CN=authserver"
+        openssl x509 -req -in server.req -CA ca.crt -CAkey ca.key -set_serial 100 -extensions server -days 1460 -outform PEM -out server_cert.pem
+        # Clientcert 1
+        cd /Cert1
+        openssl req -nodes -newkey rsa:4096 -keyform PEM -keyout ca.key -x509 -days 3650 -outform PEM -out ca.crt  -subj "/C=DE/ST=OverTheAir/L=Springfield/O=Dreams/CN=CACart1"
+        openssl genrsa -out client.key 4096
+        openssl req -new -key client.key -out client.req -subj "/C=DE/ST=OverTheAir/L=Springfield/O=Dreams/CN=ClientCart1"
+        openssl x509 -req -in client.req -CA ca.crt -CAkey ca.key -set_serial 101 -extensions client -days 365 -outform PEM -out client.crt
+        # Clientcert 2
+        cd /Cert2
+        openssl req -nodes -newkey rsa:4096 -keyform PEM -keyout ca.key -x509 -days 3650 -outform PEM -out ca.crt  -subj "/C=DE/ST=OverTheAir/L=Springfield/O=Dreams/CN=CACart2"
+        openssl genrsa -out client.key 4096
+        openssl req -new -key client.key -out client.req -subj "/C=DE/ST=OverTheAir/L=Springfield/O=Dreams/CN=ClientCart2"
+        openssl x509 -req -in client.req -CA ca.crt -CAkey ca.key -set_serial 101 -extensions client -days 365 -outform PEM -out client.crt
+        # Clientcert 3
+        cd /Cert3
+        openssl req -nodes -newkey rsa:4096 -keyform PEM -keyout ca.key -x509 -days 3650 -outform PEM -out ca.crt  -subj "/C=DE/ST=OverTheAir/L=Springfield/O=Dreams/CN=CACart2"
+        openssl genrsa -out client.key 4096
+        openssl req -new -key client.key -out client.req -subj "/C=DE/ST=OverTheAir/L=Springfield/O=Dreams/CN=ClientCart2"
+        openssl x509 -req -in client.req -CA ca.crt -CAkey ca.key -set_serial 101 -extensions client -days 365 -outform PEM -out client.crt
+    volumes:
+    - Cert1:/Cert1
+    - Cert2:/Cert2
+    - Cert3:/Cert3
+    - Servercert:/Server
+  configserver:
+    image: $IMAGEPREFIX$CONFIGSERVER_IMAGE_NAME$DOCKER_TAG
+    environment:
+      PRE_SCRIPT: |
+        #!/bin/sh
+        for i in `seq 10` ; do
+          if [ `ls /example/server | wc -w` -ge 2 ]; then
+            break
+          fi
+          sleep 1
+        done
+        i=1
+        for i in `seq 10` ; do
+          if [ `ls /example/clientCert1 | wc -w` -ge 4 ]; then
+            break
+          fi
+          sleep 1
+        done
+        i=1
+        for i in `seq 10` ; do
+          if [ `ls /example/clientCert2 | wc -w` -ge 4 ]; then
+            break
+          fi
+          sleep 1
+        done
+        sed 's|example/|/example/|g' /example/config.yml >/tmp/config.yml
+    command: ["-config","/tmp/config.yml"]
+    depends_on:
+    - openssl
+    volumes:
+    - ./example:/example
+    - Cert1:/example/clientCert1
+    - Cert2:/example/clientCert2
+    - Servercert:/example/server
+  sut:
+    image: patsys/curl
+    command:
+    - /bin/sh
+    - -c
+    - |
+        i=1
+        for i in `seq 30` ; do
+          curl --cacert /example/server/ca.crt -LI https://configserver:8080/noexist
+          ret=`curl --cacert /example/server/ca.crt -LI https://configserver:8080/noexist -o /dev/null -w '%{http_code}\n' -s`
+          if [ "$ret" -eq 404 ] || [ "$ret" -eq 401 ]; then 
+            break
+          fi
+          sleep 1
+        done
+        set -ex
+        set -o pipefail
+        curl -f --cacert /example/server/ca.crt https://configserver:8080 && exit 1 || echo failed correct
+        curl -f --cacert /example/server/ca.crt https://configserver:8080/config && exit 1 || echo failed correct
+        curl --key /example/clientCert1/client.key --cert /example/clientCert1/client.crt  --cacert /example/server/ca.crt -d '{"username":"user1"}' https://configserver:8080/config | grep -q '{"config":{"backend":"kubernetes","kuberun":{"connection":{"host":"kubernetes.default.svc"},"pod":{"metadata":{"namespace":"default"},"spec":{"containers":[{"image":"containerssh/containerssh","name":"containerssh"}]}}}}}'
+        curl --key /example/clientCert1/client.key --cert /example/clientCert1/client.crt  --cacert /example/server/ca.crt -d '{"username":"user2"}' https://configserver:8080/config | grep -q '{"config":{"backend":"docker","docker":{"config":{"image":"ubuntu"},"connection":{"host":"dockerhost:2375"},"execution":{"image":"containerssh/containerssh"}}}}'
+    volumes:
+    - Cert1:/example/clientCert1
+    - Cert2:/example/clientCert2
+    - Cert3:/example/clientCert3
+    - Servercert:/example/server
+    links:
+    - configserver
+    depends_on:
+    - openssl
+    - configserver
+volumes:
+  Cert1: {}
+  Cert2: {}
+  Cert3: {}
+  Servercert: {}
