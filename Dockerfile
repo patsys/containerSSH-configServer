@@ -13,4 +13,5 @@ ARG gid=1001
 RUN addgroup -g ${gid} ${group} && adduser -D -u ${uid}  ${user} -G ${group}
 COPY /bin/entrypoint.sh /etc/entrypoint
 COPY --from=build /usr/local/bin/configServer /bin/configServer
+USER ${uid}:${gid}
 ENTRYPOINT [ "/etc/entrypoint" ]

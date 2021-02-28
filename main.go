@@ -9,7 +9,7 @@ import (
 	"flag"
 	"io/ioutil"
 	"path/filepath"
-    "sigs.k8s.io/yaml"
+	"sigs.k8s.io/yaml"
 	"os"
 	"github.com/golang/glog"
 	"strings"
