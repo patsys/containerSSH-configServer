@@ -16,7 +16,9 @@ import (
 	"net"
 	"fmt"
 	"context"
-	"io"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 
@@ -36,25 +38,12 @@ type User struct {
 type myConfigReqHandler struct {
 }
 
-type sureFireWriter struct {
-	backend io.Writer
-}
-
 var (
 	cfg = &Config{}
 	configFlag string
 	tmpDir string
 	logger log.Logger
 )
-
-func (s *sureFireWriter) Write(p []byte) (n int, err error) {
-	n, err = s.backend.Write(p)
-	if err != nil {
-		// Ignore errors      
-		return len(p), nil
-	}
-	return n, nil
-}
 
 func (m *myConfigReqHandler) OnConfig(
     request configuration.ConfigRequest,
@@ -68,11 +57,19 @@ func (m *myConfigReqHandler) OnConfig(
 	}
 
 	for _, group := range user.Groups {
-		if _, err := os.Stat(filepath.Join(tmpDir, group + ".yml")); err == nil {
-			file, err := os.Open(filepath.Join(tmpDir, group + ".yml"))
+		filePath := filepath.Join(tmpDir, group + ".yml")
+		if _, err := os.Stat(filePath); err == nil {
+			file, err := os.Open(filePath)
 			if err != nil {
-				logger.Errorf("Can not open Config file: %v", err)
-				return *appConfig, fmt.Errorf("Can not open Config file: %v", err)
+				logger.Error(
+					log.Wrap(
+						err,
+						"GroupConfigNotFound",
+						"Can not open Config file",
+					).Label("file", filePath).
+					Label("group", group),
+				)
+				return *appConfig, fmt.Errorf("Group(%s) config not found", group)
 			}
 			loader, err := configuration.NewReaderLoader(
 				file,
@@ -80,17 +77,38 @@ func (m *myConfigReqHandler) OnConfig(
 				configuration.FormatYAML,
 			)
 			if err != nil {
-				logger.Errorf("Config Load not Correct: %v", err)
-				return *appConfig, fmt.Errorf("Config Load not Correct: %v", err)
+				logger.Error(
+					log.Wrap(
+						err,
+						"ConfigLoadError",
+						"Can not load config for Group",
+					).Label("file", filePath).
+					Label("group", group),
+				)
+				return *appConfig, fmt.Errorf("Config Load for Group(%s) not correct", group)
 			}
 
 			err = loader.Load(context.Background(), appConfig)
 			if err != nil {
-				logger.Errorf("Config not Correct: %v", err)
-				return *appConfig, fmt.Errorf("Config not Correct: %v", err)
+				logger.Error(
+					log.Wrap(
+						err,
+						"ConfigParseError",
+						"Can not parse config for Group",
+					).Label("file", filePath).
+					Label("group", group),
+				)
+				return *appConfig, fmt.Errorf("Parse config for Group(%s) not correct", group)
 			}
 		} else {
-			logger.Errorf("File %s not exist", filepath.Join(tmpDir, group + ".yml"))
+			logger.Info(
+				log.Wrap(
+					err,
+					"FileNotExist",
+					"file not Exist",
+				).Label("file", filePath).
+				Label("group", group),
+			)
 		}
 	}
 	return *appConfig, nil
@@ -114,73 +132,137 @@ func checkIp(remoteIp string, ips []string) bool {
 func main() {
 	server, err := configuration.NewServer(
 		cfg.Server,
-	    &myConfigReqHandler{},
-	    logger,
+		&myConfigReqHandler{},
+		logger,
 	)
+
 	if err != nil {
-    // Handle error
+	    // Handle error
 	}
+
 	lifecycle := service.NewLifecycle(server)
-	_ = lifecycle.Run()
+
+	go func() {
+		_ = lifecycle.Run()
+	}()
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		if _, ok := <-signals; ok {
+			// ok means the channel wasn't closed, let's trigger a shutdown.
+			stopContext, _ := context.WithTimeout(
+				context.Background(),
+				20 * time.Second,
+			)
+			lifecycle.Stop(stopContext)
+		}
+	}()
+	// Wait for the service to terminate.
+	err = lifecycle.Wait()
+	// We are already shutting down, ignore further signals
+	signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
+	// close signals channel so the signal handler gets terminated
+	close(signals)
+
+	if err != nil {
+	    // Exit with a non-zero signal
+	    fmt.Fprintf(
+	        os.Stderr,
+	        "an error happened while running the server (%v)",
+	        err,
+	    )
+	    os.Exit(1)
+	}
+	os.Exit(0)
 }
 
 func convertMapToFile(){
-	tmpDirLocal, err := ioutil.TempDir("", "config")
+	tmpDirLocal, err := ioutil.TempDir("", "config");
 	if err != nil {
-		logger.Errorf("Can not Create tmp dir: %v", err)
+		logger.Error(
+			log.Wrap(
+				err,
+				"TempDirCreateError",
+				"Can not Create tmp dir",
+			).Label("dir", tmpDirLocal),
+		)
 	}
 	defer os.RemoveAll(tmpDir)
 	tmpDir = tmpDirLocal
 	for propertiesKey, propertiesValue := range cfg.Properties {
-
 		config, ok := propertiesValue["config"]
 		if !ok {
 			continue
 		}
 
-        content, err := yaml.Marshal(config)
+		content, err := yaml.Marshal(config)
 		if err != nil {
-			logger.Errorf("Config file %s can not parsed: %v",config, err)
+			logger.Error(
+				log.Wrap(
+					err,
+					"ParseError",
+					"Config file %s can not parsed",
+				).Label("File", config),
+			)
 			os.Exit(-1)
 		}
-
-		f, err := os.Create(filepath.Join(tmpDir, propertiesKey + ".yml"))
+		filePath := filepath.Join(tmpDir, propertiesKey + ".yml")
+		f, err := os.Create(filePath)
 		if err != nil {
-			logger.Errorf("Can not create file %s: %v", filepath.Join(tmpDir, propertiesKey + ".yml"), err)
+			logger.Error(
+				log.Wrap(
+					err,
+					"FileCreateError",
+					"Can not create file",
+				).Label("file",filePath),
+			)
 			os.Exit(-1)
 		}
 		defer f.Close()
 
-		_, err = f.Write(content)
+		_, err = f.Write(content);
 		if err != nil {
-			logger.Errorf("Can not write file %s: %v", filepath.Join(tmpDir, propertiesKey + ".yml"), err)
+			logger.Error(
+				log.Wrap(
+					err,
+					"FileWriteError",
+					"Can not write file",
+				).Label("file",filePath),
+			)
 			os.Exit(-1)
 		}
 		f.Close()
 
-		file, err := os.Open(filepath.Join(tmpDir, propertiesKey + ".yml"))
-		 _, err = configuration.NewReaderLoader(
-			file,
-    		logger,
-    		configuration.FormatYAML,
-		)
-		if err != nil {
-			logger.Errorf("Config failed: %v", err)
-			os.Exit(-1)
-		}		
-		appConfig := &configuration.AppConfig{}
+		file, err := os.Open(filePath)
 		loader, err := configuration.NewReaderLoader(
 			file,
 			logger,
 			configuration.FormatYAML,
 		)
 		if err != nil {
-			logger.Errorf("Config Load not Correct: %v", err)
+			logger.Error(
+				log.Wrap(
+					err,
+					"ConfigLoaderError",
+					"Config load failed",
+				).Label("file", filePath),
+			)
 			os.Exit(-1)
 		}
-		err = loader.Load(context.Background(), appConfig)
+
+		appConfig := &configuration.AppConfig{}
+
+		err = loader.Load(context.Background(), appConfig);
 		if err != nil {
-			logger.Errorf("Can not parse file group %s: %v",propertiesKey, err)
+			logger.Error(
+				log.Wrap(
+					err,
+					"ConfigParseError",
+					"Config parse failed",
+				).Label("file", filePath).
+				Label("group", propertiesKey),
+			)
 			os.Exit(-1)
 		}
 		file.Close()
@@ -211,7 +293,7 @@ func convertFileToMap() {
 			os.Exit(-1)
 		}
 	}
-	
+
 	for _, path := range cfg.PropertiesFolders {
 		err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 			properties := map[string]interface{}{}
@@ -274,7 +356,7 @@ func init() {
 	structutils.Defaults(&cfg.Log)
 	structutils.Defaults(&cfg.Server)
 
-	loggerLocal, err :=  log.NewFactory(&sureFireWriter{os.Stdout}).Make(cfg.Log, "")
+	loggerLocal, err :=  log.NewLogger(cfg.Log)
 	if err != nil {
 		panic("Create Logger failed")
 	}
@@ -283,4 +365,3 @@ func init() {
 	convertMapToFile()
 
 }
-

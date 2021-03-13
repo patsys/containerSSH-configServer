@@ -48,7 +48,7 @@ services:
     environment:
       PRE_SCRIPT: |
         #!/bin/sh
-        set -e
+        set -ex
         if [ "$DEBUG_CONFIGSERVER" == "true" ]; then set -x; fi
         for i in `seq 10` ; do
           if [ `ls /example/server | wc -w` -ge 2 ]; then
@@ -93,10 +93,10 @@ services:
           fi
           sleep 1
         done
-        set -ex
+        set -e
         set -o pipefail
         curl -f --cacert /example/server/ca.crt https://configserver:8080 && exit 1 || echo failed correct
-        #curl --key /example/clientCert1/client.key --cert /example/clientCert1/client.crt  --cacert /example/server/ca.crt -d '{"username":"user1"}' https://configserver:8080/config | grep -q '{"config":{"backend":"kubernetes","kuberun":{"connection":{"host":"kubernetes.default.svc"},"pod":{"metadata":{"namespace":"default"},"spec":{"containers":[{"image":"containerssh/containerssh","name":"containerssh"}]}}}}}'
+        #curl --key /example/clientCert1/client.key --cert /example/clientCert1/client.crt  --cacert /example/server/ca.crt -d '{"username":"user1"}' https://configserver:8080/config | grep -q '{"config":{"backend":"kubernetes","kubernetes":{"connection":{"host":"kubernetes.default.svc","pod":{"metadata":{"namespace":"default"},"spec":{"containers":[{"name":"containerssh","image":"containerssh/container"}]}}}}}}'
         #curl --key /example/clientCert1/client.key --cert /example/clientCert1/client.crt  --cacert /example/server/ca.crt -d '{"username":"user2"}' https://configserver:8080/config | grep -q '{"config":{"backend":"docker","docker":{"config":{"image":"ubuntu"},"connection":{"host":"dockerhost:2375"},"execution":{"image":"containerssh/containerssh"}}}}'
     volumes:
     - Cert1:/example/clientCert1

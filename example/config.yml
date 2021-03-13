@@ -17,10 +17,10 @@ properties:
         pod:
           metadata:
             namespace: default
-#          spec:
-#            containers:
-#            - name: containerssh
-#              image: containerssh/containerssh
+          spec:
+            containers:
+            - name: containerssh
+              image: containerssh/containerssh
   admin:
     config:
       docker:
@@ -40,3 +40,5 @@ server: # server config
   cert: example/server/server_cert.pem #server cert
   key: example/server/server_key.pem #server key
   clientcacert: example/clientCert1/ca.crt # trusted ca 1
+log:
+  level: debug
